@@ -93,6 +93,58 @@ def overall(results: pd.DataFrame, usage_total: float) -> pd.DataFrame:
     g["items_with_stockouts"] = results[results["stockout_days"] > 0].groupby("policy").size()
     g["items_with_stockouts"] = g["items_with_stockouts"].fillna(0).astype(int)
     return g
+
+def style(ax, title, xlabel, ylabel):
+    ax.set_title(title, loc="left", fontsize=12, color=INK, fontweight="bold")
+    ax.set_xlabel(xlabel, color=MUTED); ax.set_ylabel(ylabel, color=MUTED)
+    for s in ("top", "right"): ax.spines[s].set_visible(False)
+    for s in ("left", "bottom"): ax.spines[s].set_color("#c9c8c3")
+    ax.tick_params(colors=MUTED)
+    ax.grid(axis="y", color="#e7e6e2", linewidth=0.8); ax.set_axisbelow(True)
+def charts(params, results):
+    FIGS.mkdir(parents=True, exist_ok=True)
+    plt.rcParams.update({"font.family": "DejaVu Sans", "figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb"})
+
+    # 1) ABC analysis: a few items drive most of the spend.
+    abc = params.sort_values("annual_spend", ascending=False)
+    cum = abc["annual_spend"].cumsum() / abc["annual_spend"].sum()
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    ax.bar(range(len(abc)), abc["annual_spend"] / 1000, color=BLUE, width=0.75)
+    style(ax, "Annual spend by item (ABC analysis)", "Items, highest spend first", "Annual spend ($ thousands)")
+    n_a = int((cum <= 0.80).sum()) + 1
+    ax.axvline(n_a - 0.5, color=MUTED, linestyle="--", linewidth=1)
+    ax.text(n_a - 0.2, ax.get_ylim()[1] * 0.9, f"A items: top {n_a} = 80% of spend", color=INK, fontsize=9)
+    ax.set_xticks([])
+    fig.tight_layout(); fig.savefig(FIGS / "01_abc_spend.png", dpi=150); plt.close(fig)
+
+    # 2) Par change by item: the habit over-stocks some items and under-stocks others.
+    w = results.pivot_table(index="item_name", columns="policy", values="par_level")
+    w["change"] = (w["Smart par"] / w["Current par"] - 1) * 100
+    w = w.sort_values("change")
+    fig, ax = plt.subplots(figsize=(9, 8))
+    colors = [BLUE if c < 0 else ORANGE for c in w["change"]]
+    ax.barh(w.index, w["change"], color=colors, height=0.7)
+    ax.axvline(0, color=MUTED, linewidth=1)
+    style(ax, "Smart par vs. current par (2-week habit)", "Change in par level (%)", "")
+    ax.grid(axis="x", color="#e7e6e2"); ax.grid(axis="y", visible=False)
+    ax.tick_params(axis="y", labelsize=8)
+    handles = [Patch(color=BLUE, label="Lower par (over-stocked today)"),
+               Patch(color=ORANGE, label="Higher par (under-stocked today)")]
+    ax.legend(handles=handles, frameon=False, fontsize=9, loc="lower right")
+    fig.tight_layout(); fig.savefig(FIGS / "02_par_change_by_item.png", dpi=150); plt.close(fig)
+
+    # 3) Units short by category, grouped bars for all three policies.
+    cat = results.pivot_table(index="category", columns="policy", values="units_short", aggfunc="sum")
+    cat = cat.sort_values("Current par", ascending=True)
+    y = np.arange(len(cat)); h = 0.27
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for i, (pol, col) in enumerate(zip(POLICIES, (BLUE, ORANGE, AQUA))):
+        ax.barh(y + (1 - i) * h, cat[pol], height=h, color=col, label=pol, edgecolor="#fcfcfb", linewidth=1)
+    ax.set_yticks(y, cat.index)
+    style(ax, "Units short by category, Jul–Dec test period", "Units requested but not on the shelf", "")
+    ax.grid(axis="x", color="#e7e6e2"); ax.grid(axis="y", visible=False)
+    ax.legend(frameon=False, fontsize=9, loc="lower right")
+    fig.tight_layout(); fig.savefig(FIGS / "03_units_short_by_category.png", dpi=150); plt.close(fig)
 def main():
     items = pd.read_csv(DATA / "items.csv")
     usage = pd.read_csv(DATA / "daily_usage.csv", parse_dates=["date"])
@@ -113,7 +165,7 @@ def main():
     params.to_csv(REPORTS / "item_parameters.csv")
     results.to_csv(REPORTS / "results_by_item.csv", index=False)
     sweep.to_csv(REPORTS / "service_level_sweep.csv", index=False)
-    # charts(params, results)      <- remove the # in Session 9
+    charts(params, results)    
     summary.to_csv(REPORTS / "summary.csv")
 
     pd.set_option("display.float_format", "{:,.3f}".format)
